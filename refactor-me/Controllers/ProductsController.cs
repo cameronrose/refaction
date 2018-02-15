@@ -1,115 +1,170 @@
 ﻿using System;
-using System.Net;
 using System.Web.Http;
-using refactor_me.Models;
+using refactor_me.Domain;
+using System.Linq;
+using System.Collections.Generic;
+using refactor_me.Interfaces;
+using log4net;
+using System.Threading.Tasks;
+using System.Data.Entity;
+using refactor_me.ViewModels;
+using AutoMapper;
 
 namespace refactor_me.Controllers
 {
     [RoutePrefix("products")]
     public class ProductsController : ApiController
     {
-        [Route]
-        [HttpGet]
-        public Products GetAll()
+        private static readonly ILog _log = LogManager.GetLogger(typeof(ProductsController));
+        private IUnitOfWork _unitOfWork;
+        private IMapper _mapper;
+
+        public ProductsController(IUnitOfWork unitOfWork, IMapper mapper)
         {
-            return new Products();
+            _log.Debug("Entering ProductsController()");
+            _unitOfWork = unitOfWork;
+            _mapper = mapper;
         }
 
         [Route]
         [HttpGet]
-        public Products SearchByName(string name)
+        public async Task<IHttpActionResult> GetAll()
         {
-            return new Products(name);
+            var result = await _unitOfWork.ProductRepository.GetAll().ToListAsync();
+            var viewModel = ToModel<IEnumerable<Product>, ProductItemsViewModel>(result);
+
+            return HttpResult(viewModel);
+        }
+
+        [Route("name={name}")]
+        [HttpGet]
+        public async Task<IHttpActionResult> SearchByName(string name)
+        {
+            var result = await _unitOfWork.ProductRepository.GetAll()
+                .Where(m => m.Name.Equals(name)).ToListAsync();
+
+            var viewModel = ToModel<IEnumerable<Product>, ProductItemsViewModel>(result);
+
+            return HttpResult(viewModel);
         }
 
         [Route("{id}")]
         [HttpGet]
-        public Product GetProduct(Guid id)
+        public async Task<IHttpActionResult> GetProduct(Guid id)
         {
-            var product = new Product(id);
-            if (product.IsNew)
-                throw new HttpResponseException(HttpStatusCode.NotFound);
+            var result = await _unitOfWork.ProductRepository.GetAll()
+                .SingleOrDefaultAsync(m => m.Id.Equals(id));
 
-            return product;
+            var viewModel = ToModel<Product, ProductViewModel>(result);
+
+            return HttpResult(viewModel);
         }
 
         [Route]
         [HttpPost]
-        public void Create(Product product)
+        public async Task<IHttpActionResult> Create([FromBody]ProductViewModel productViewModel)
         {
-            product.Save();
+            var product = ToModel<ProductViewModel, Product>(productViewModel);
+            var result = await _unitOfWork.ProductRepository.InsertAsync(product);
+            var viewModel = ToModel<Product, ProductViewModel>(result);
+
+            return Ok(viewModel);
         }
 
         [Route("{id}")]
         [HttpPut]
-        public void Update(Guid id, Product product)
+        public async Task<IHttpActionResult> Update(Guid id, [FromBody]ProductViewModel productViewModel)
         {
-            var orig = new Product(id)
-            {
-                Name = product.Name,
-                Description = product.Description,
-                Price = product.Price,
-                DeliveryPrice = product.DeliveryPrice
-            };
+            var product = ToModel<ProductViewModel, Product>(productViewModel);
+            var result = await _unitOfWork.ProductRepository.UpdateAsync(product, id);
+            var viewModel = ToModel<Product, ProductViewModel>(result);
 
-            if (!orig.IsNew)
-                orig.Save();
+            return HttpResult(viewModel);
         }
 
         [Route("{id}")]
         [HttpDelete]
-        public void Delete(Guid id)
+        public async Task<IHttpActionResult> Delete(Guid id)
         {
-            var product = new Product(id);
-            product.Delete();
+            var result = await _unitOfWork.ProductRepository.DeleteAsync(id);
+
+            if (result > 0)
+                return Ok();
+
+            return NotFound();
         }
 
         [Route("{productId}/options")]
         [HttpGet]
-        public ProductOptions GetOptions(Guid productId)
+        public async Task<IHttpActionResult> GetOptions(Guid productId)
         {
-            return new ProductOptions(productId);
+            var result = await _unitOfWork.ProductOptionRepository.GetAll()
+                .Where(m => m.ProductId == productId).ToListAsync();
+
+            var viewModel = ToModel<IEnumerable<ProductOption>, ProductOptionItemsViewModel>(result);
+
+            return HttpResult(viewModel);
         }
 
         [Route("{productId}/options/{id}")]
         [HttpGet]
-        public ProductOption GetOption(Guid productId, Guid id)
+        public async Task<IHttpActionResult> GetOption(Guid productId, Guid id)
         {
-            var option = new ProductOption(id);
-            if (option.IsNew)
-                throw new HttpResponseException(HttpStatusCode.NotFound);
+            var result = await _unitOfWork.ProductOptionRepository.GetAll()
+                .SingleOrDefaultAsync(m => m.ProductId.Equals(productId) && m.Id.Equals(id));
 
-            return option;
+            var viewModel = ToModel<ProductOption, ProductOptionViewModel>(result);
+
+            return HttpResult(viewModel);
         }
 
         [Route("{productId}/options")]
         [HttpPost]
-        public void CreateOption(Guid productId, ProductOption option)
+        public async Task<IHttpActionResult> CreateOption(Guid productId, [FromBody]ProductOptionViewModel optionViewModel)
         {
+            var option = ToModel<ProductOptionViewModel, ProductOption>(optionViewModel);
             option.ProductId = productId;
-            option.Save();
+            var result = await _unitOfWork.ProductOptionRepository.InsertAsync(option);
+            var viewModel = ToModel<ProductOption, ProductOptionViewModel>(result);
+            
+            return HttpResult(viewModel);
         }
 
         [Route("{productId}/options/{id}")]
         [HttpPut]
-        public void UpdateOption(Guid id, ProductOption option)
+        public async Task<IHttpActionResult> UpdateOption(Guid productId, Guid id, [FromBody]ProductOptionViewModel optionViewModel)
         {
-            var orig = new ProductOption(id)
-            {
-                Name = option.Name,
-                Description = option.Description
-            };
+            var option = ToModel<ProductOptionViewModel, ProductOption>(optionViewModel);
+            option.ProductId = productId;
+            var result = await _unitOfWork.ProductOptionRepository.UpdateAsync(option, id);
+            var viewModel = ToModel<ProductOption, ProductOptionViewModel>(result);
 
-            if (!orig.IsNew)
-                orig.Save();
+            return HttpResult(viewModel);
         }
 
         [Route("{productId}/options/{id}")]
         [HttpDelete]
-        public void DeleteOption(Guid id)
+        public async Task<IHttpActionResult> DeleteOption(Guid id)
         {
-            var opt = new ProductOption(id);
-            opt.Delete();
+            var result = await _unitOfWork.ProductOptionRepository.DeleteAsync(id);
+
+            if (result > 0)
+                return Ok();
+
+            return NotFound();
+        }
+
+        private IHttpActionResult HttpResult<TModel>(TModel result)
+        {
+            if (result != null)
+                return Ok(result);
+
+            return NotFound();
+        }
+
+        private TModel ToModel<FModel, TModel>(FModel fromModel)
+        {
+            return _mapper.Map<FModel, TModel>(fromModel);
         }
     }
 }
